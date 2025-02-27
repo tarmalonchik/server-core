@@ -1,5 +1,6 @@
-module github.com/vkidmode/server-core
+module github.com/tarmalonchik/server-core
 
-go 1.19
+go 1.23.2
 
-require github.com/pkg/errors v0.9.1 // indirect
+require github.com/sirupsen/logrus v1.9.3
+require golang.org/x/sys v0.30.0 // indirect
