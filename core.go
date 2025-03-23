@@ -117,6 +117,12 @@ func (c *core) runRunners(originalContext, ctx context.Context) {
 		}(item)
 	}
 
+	if c.finishersCount <= 0 {
+		close(c.errorChan)
+		c.cancel()
+		return
+	}
+
 	for item := range c.finishersStack {
 		if originalContext.Err() != nil {
 			close(c.finishersStack)
@@ -134,7 +140,6 @@ func (c *core) runRunners(originalContext, ctx context.Context) {
 			}
 		}(item)
 	}
-
 	close(c.errorChan)
 	c.cancel()
 }
