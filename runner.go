@@ -29,6 +29,12 @@ func RepeatOnError() RunnerOpt {
 	}
 }
 
+func IsFinisher() RunnerOpt {
+	return func(v *runner) {
+		v.isFinisher = true
+	}
+}
+
 func RepeatOnPanic() RunnerOpt {
 	return func(v *runner) {
 		v.repeatOnPanic = true
@@ -52,6 +58,7 @@ type runner struct {
 	repeatOnError  bool
 	repeatOnPanic  bool
 	repeatOnFinish bool
+	isFinisher     bool
 	writeLog       bool
 }
 

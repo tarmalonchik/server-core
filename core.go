@@ -23,13 +23,17 @@ type Core interface {
 }
 
 type core struct {
-	runnableCount int64
-	runnableStack chan *runner       // stack with jobs need to run
-	errorChan     chan error         // stack with errors
-	logger        WriteLog           // you can use this logger for custom logging
-	cancel        context.CancelFunc // context.Cancel func
-	timeout       time.Duration      // time when forced termination will happen after crushing
-	jobsDone      chan interface{}   // the channel to signal when all work done
+	runnableCount  int64
+	finishersCount int64
+
+	runnableStack  chan *runner // stack with jobs need to run
+	finishersStack chan *runner // stack with jobs run when finish
+
+	errorChan chan error         // stack with errors
+	logger    WriteLog           // you can use this logger for custom logging
+	cancel    context.CancelFunc // context.Cancel func
+	timeout   time.Duration      // time when forced termination will happen after crushing
+	jobsDone  chan interface{}   // the channel to signal when all work done
 }
 
 // NewCore logger is optional field, can be nil
@@ -38,17 +42,31 @@ func NewCore(logger WriteLog, timeout time.Duration, parallelCount uint8) Core {
 		logger = &defaultLogger{}
 	}
 	return &core{
-		runnableStack: make(chan *runner, parallelCount),
-		errorChan:     make(chan error, parallelCount),
-		jobsDone:      make(chan interface{}),
-		logger:        logger,
-		timeout:       timeout,
+		runnableStack:  make(chan *runner, parallelCount),
+		finishersStack: make(chan *runner, parallelCount),
+		errorChan:      make(chan error, parallelCount),
+		jobsDone:       make(chan interface{}),
+		logger:         logger,
+		timeout:        timeout,
 	}
 }
 
 func (c *core) AddRunner(in RunnerFunc, opts ...RunnerOpt) {
-	c.runnableStack <- newRunner(in, opts...)
-	c.inc()
+	r := &runner{}
+	for i := range opts {
+		opts[i](r)
+	}
+	if r.isFinisher && (r.repeatOnFinish || r.repeatOnPanic || r.repeatOnError) {
+		panic("finisher should have no repeater")
+	}
+
+	if r.isFinisher {
+		c.finishersStack <- newRunner(in, opts...)
+		c.incFinishers()
+	} else {
+		c.runnableStack <- newRunner(in, opts...)
+		c.inc()
+	}
 }
 
 func (c *core) Launch(ctx context.Context) {
@@ -58,12 +76,12 @@ func (c *core) Launch(ctx context.Context) {
 
 	go c.waitForInterruption()
 	go c.logErrors(originalContext)
-	go c.runRunners(ctx)
+	go c.runRunners(originalContext, ctx)
 	<-ctx.Done()
 	c.waitGraceful()
 }
 
-func (c *core) runRunners(ctx context.Context) {
+func (c *core) runRunners(originalContext, ctx context.Context) {
 	for item := range c.runnableStack {
 		if ctx.Err() != nil {
 			close(c.runnableStack)
@@ -98,6 +116,25 @@ func (c *core) runRunners(ctx context.Context) {
 			}
 		}(item)
 	}
+
+	for item := range c.finishersStack {
+		if originalContext.Err() != nil {
+			close(c.finishersStack)
+			continue
+		}
+
+		go func(*runner) {
+			err, _ := item.run(originalContext)
+			if item.writeLog && err != nil {
+				c.errorChan <- err
+			}
+
+			if c.decFinishers() <= 0 {
+				close(c.finishersStack)
+			}
+		}(item)
+	}
+
 	close(c.errorChan)
 	c.cancel()
 }
@@ -152,4 +189,11 @@ func (c *core) inc() {
 
 func (c *core) dec() int64 {
 	return atomic.AddInt64(&c.runnableCount, -1)
+}
+
+func (c *core) incFinishers() {
+	atomic.AddInt64(&c.finishersCount, 1)
+}
+func (c *core) decFinishers() int64 {
+	return atomic.AddInt64(&c.finishersCount, -1)
 }
