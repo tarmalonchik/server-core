@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ type Core interface {
 }
 
 type core struct {
+	runnableCount int64
 	runnableStack chan *runner       // stack with jobs need to run
 	errorChan     chan error         // stack with errors
 	logger        WriteLog           // you can use this logger for custom logging
@@ -46,14 +48,16 @@ func NewCore(logger WriteLog, timeout time.Duration, parallelCount uint8) Core {
 
 func (c *core) AddRunner(in RunnerFunc, opts ...RunnerOpt) {
 	c.runnableStack <- newRunner(in, opts...)
+	c.inc()
 }
 
 func (c *core) Launch(ctx context.Context) {
+	originalContext := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
 	go c.waitForInterruption()
-	go c.logErrors(ctx)
+	go c.logErrors(originalContext)
 	go c.runRunners(ctx)
 	<-ctx.Done()
 	c.waitGraceful()
@@ -67,7 +71,7 @@ func (c *core) runRunners(ctx context.Context) {
 		}
 		go func(*runner) {
 			err, wasPanic := item.run(ctx)
-			if item.wireLog && err != nil {
+			if item.writeLog && err != nil {
 				c.errorChan <- err
 			}
 
@@ -87,6 +91,10 @@ func (c *core) runRunners(ctx context.Context) {
 				time.Sleep(100 * time.Millisecond)
 				c.runnableStack <- item
 				return
+			}
+
+			if c.dec() <= 0 {
+				close(c.runnableStack)
 			}
 		}(item)
 	}
@@ -110,7 +118,6 @@ func (c *core) logErr(ctx context.Context, err error) {
 		}
 		return
 	}
-	fmt.Println("here")
 	if strings.Contains(err.Error(), panicError.Error()) {
 		c.logger.Log(ctx, fmt.Sprintf("panic happened: %s", err.Error()))
 	} else {
@@ -137,4 +144,12 @@ func (c *core) waitForInterruption() {
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch
 	c.cancel()
+}
+
+func (c *core) inc() {
+	atomic.AddInt64(&c.runnableCount, 1)
+}
+
+func (c *core) dec() int64 {
+	return atomic.AddInt64(&c.runnableCount, -1)
 }

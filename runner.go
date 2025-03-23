@@ -43,7 +43,7 @@ func RepeatOnFinish() RunnerOpt {
 
 func WriteLogEnable() RunnerOpt {
 	return func(v *runner) {
-		v.wireLog = true
+		v.writeLog = true
 	}
 }
 
@@ -52,7 +52,7 @@ type runner struct {
 	repeatOnError  bool
 	repeatOnPanic  bool
 	repeatOnFinish bool
-	wireLog        bool
+	writeLog       bool
 }
 
 func (r *runner) run(ctx context.Context) (err error, wasPanic bool) {
